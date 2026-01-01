@@ -8,6 +8,7 @@ import { Dashboard } from './views/Dashboard';
 import { AuthView } from './components/AuthView';
 import { SettingsModal } from './components/SettingsModal';
 import { AppView, DataRow, ChartConfig, ChatMessage, DashboardItem, User } from './types';
+import { CheckCircle2, Info } from 'lucide-react';
 
 function App() {
   const [currentView, setCurrentView] = useState<AppView>(AppView.DASHBOARD);
@@ -16,6 +17,7 @@ function App() {
   const [dashboardItems, setDashboardItems] = useState<DashboardItem[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [notification, setNotification] = useState<{message: string, type: 'success' | 'info'} | null>(null);
   
   // Auth State
   const [user, setUser] = useState<User | null>(() => {
@@ -38,6 +40,14 @@ function App() {
       localStorage.setItem('theme', 'light');
     }
   }, [isDarkMode]);
+
+  // Notification Auto-hide
+  useEffect(() => {
+    if (notification) {
+      const timer = setTimeout(() => setNotification(null), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [notification]);
 
   // Chat State
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
@@ -87,24 +97,52 @@ function App() {
 
   // --- Handlers ---
 
+  const parseCSVLine = (line: string): string[] => {
+    const result: string[] = [];
+    let curVal = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') {
+        inQuotes = !inQuotes;
+      } else if (char === ',' && !inQuotes) {
+        result.push(curVal.trim().replace(/^"|"$/g, ''));
+        curVal = "";
+      } else {
+        curVal += char;
+      }
+    }
+    result.push(curVal.trim().replace(/^"|"$/g, ''));
+    return result;
+  };
+
   const handleFileUpload = async (file: File) => {
     const text = await file.text();
-    const lines = text.split('\n').filter(line => line.trim() !== '');
+    const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
     if (lines.length > 0) {
-      const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+      // Improved parsing to handle quoted commas (common in names in Titanic dataset)
+      const headers = parseCSVLine(lines[0]);
+      
       const parsedData = lines.slice(1).map(line => {
-        const values = line.split(','); 
+        const values = parseCSVLine(line);
         const row: DataRow = {};
         headers.forEach((h, i) => {
-            const val = values[i]?.trim().replace(/^"|"$/g, '');
+            const val = values[i];
+            if (val === undefined) {
+              row[h] = null;
+              return;
+            }
             const num = parseFloat(val);
-            row[h] = isNaN(num) ? val : num;
+            // Only convert to number if it's truly a valid number string and not just a prefix (like '3rd')
+            row[h] = (isNaN(num) || val.trim() === '' || isNaN(Number(val))) ? val : num;
         });
         return row;
       });
+      
       setHeaders(headers);
       setData(parsedData);
       setCurrentView(AppView.DATA);
+      setNotification({ message: `Successfully loaded ${parsedData.length} records.`, type: 'success' });
       setChatMessages(prev => [...prev, { 
           id: Date.now().toString(), 
           role: 'system', 
@@ -126,6 +164,7 @@ function App() {
         };
         return [...prev, newItem];
     });
+    setNotification({ message: 'Added to Dashboard', type: 'success' });
   }, []);
 
   const handleRemoveFromDashboard = useCallback((id: string) => {
@@ -169,27 +208,47 @@ function App() {
   const handleAiCleanData = useCallback((column: string, operation: string) => {
       setData(prevData => {
           let newData = [...prevData];
+          const beforeCount = newData.length;
+
           if (operation === 'remove_outliers') {
-              newData = [...newData].sort((a, b) => (Number(a[column]) || 0) - (Number(b[column]) || 0));
-              const lowerBound = Math.floor(newData.length * 0.05);
-              const upperBound = Math.floor(newData.length * 0.95);
-              newData = newData.slice(lowerBound, upperBound);
+              // IQR Method for Outlier removal
+              const values = newData.map(r => Number(r[column])).filter(v => !isNaN(v)).sort((a, b) => a - b);
+              if (values.length > 4) {
+                  const q1 = values[Math.floor(values.length * 0.25)];
+                  const q3 = values[Math.floor(values.length * 0.75)];
+                  const iqr = q3 - q1;
+                  const min = q1 - 1.5 * iqr;
+                  const max = q3 + 1.5 * iqr;
+                  newData = newData.filter(r => {
+                      const v = Number(r[column]);
+                      return isNaN(v) || (v >= min && v <= max);
+                  });
+              }
+              setNotification({ message: `Outliers removed. Dropped ${beforeCount - newData.length} rows.`, type: 'info' });
           } else if (operation === 'impute_mean') {
               let sum = 0;
               let count = 0;
               prevData.forEach(r => {
-                  if (typeof r[column] === 'number') {
-                      sum += r[column] as number;
+                  const val = Number(r[column]);
+                  if (!isNaN(val)) {
+                      sum += val;
                       count++;
                   }
               });
-              const mean = count > 0 ? sum / count : 0;
-              newData = newData.map(r => ({
-                  ...r,
-                  [column]: (r[column] === null || r[column] === '' || isNaN(Number(r[column]))) ? mean : r[column]
-              }));
+              const mean = count > 0 ? Number((sum / count).toFixed(2)) : 0;
+              let imputedCount = 0;
+              newData = newData.map(r => {
+                  const val = r[column];
+                  if (val === null || val === '' || val === undefined || isNaN(Number(val))) {
+                      imputedCount++;
+                      return { ...r, [column]: mean };
+                  }
+                  return r;
+              });
+              setNotification({ message: `Imputed mean (${mean}) for ${imputedCount} missing values in ${column}.`, type: 'success' });
           } else if (operation === 'drop_missing') {
-              newData = newData.filter(r => r[column] !== null && r[column] !== '' && r[column] !== undefined);
+              newData = newData.filter(r => r[column] !== null && r[column] !== '' && r[column] !== undefined && !isNaN(Number(r[column])));
+              setNotification({ message: `Dropped ${beforeCount - newData.length} rows with missing values in ${column}.`, type: 'info' });
           }
           return newData;
       });
@@ -214,7 +273,21 @@ function App() {
         onLogout={handleLogout}
       />
       
-      <main className="flex-1 flex flex-col min-w-0 transition-all">
+      <main className="flex-1 flex flex-col min-w-0 transition-all relative">
+        {/* Toast Notification */}
+        {notification && (
+          <div className="absolute top-6 left-1/2 -translate-x-1/2 z-[100] animate-fade-in pointer-events-none">
+            <div className={`flex items-center gap-3 px-5 py-3 rounded-2xl shadow-2xl border backdrop-blur-md ${
+              notification.type === 'success' 
+              ? 'bg-green-50/90 dark:bg-green-900/40 border-green-200 dark:border-green-800 text-green-700 dark:text-green-300' 
+              : 'bg-blue-50/90 dark:bg-blue-900/40 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300'
+            }`}>
+              {notification.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : <Info className="w-5 h-5" />}
+              <span className="text-sm font-semibold">{notification.message}</span>
+            </div>
+          </div>
+        )}
+
         {currentView === AppView.DASHBOARD && (
           <Dashboard 
             data={data} 

@@ -1,8 +1,6 @@
 import { GoogleGenAI, FunctionDeclaration, Type, Tool } from "@google/genai";
 
-const apiKey = process.env.API_KEY || '';
-
-const ai = new GoogleGenAI({ apiKey });
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 // --- Tool Definitions ---
 
@@ -28,12 +26,16 @@ const generateVisualizationTool: FunctionDeclaration = {
 
 const cleanDataTool: FunctionDeclaration = {
   name: "cleanData",
-  description: "Perform data cleaning operations like removing outliers or imputing missing values.",
+  description: "Perform data cleaning operations like removing outliers, imputing missing values, or dropping rows with null values.",
   parameters: {
     type: Type.OBJECT,
     properties: {
-      operation: { type: Type.STRING, enum: ["remove_outliers", "impute_mean", "drop_missing"], description: "The cleaning operation to perform." },
-      column: { type: Type.STRING, description: "The column to apply the operation on." }
+      operation: { 
+        type: Type.STRING, 
+        enum: ["remove_outliers", "impute_mean", "drop_missing"], 
+        description: "The cleaning operation to perform: 'remove_outliers' uses IQR method, 'impute_mean' fills nulls with column average, 'drop_missing' removes rows with any nulls in this column." 
+      },
+      column: { type: Type.STRING, description: "The column to apply the cleaning operation on." }
     },
     required: ["operation", "column"]
   }
@@ -57,30 +59,23 @@ const tools: Tool[] = [{
 export const getGeminiResponse = async (
   history: { role: string; parts: { text: string }[] }[],
   dataContext: string,
-  modelName: string = "gemini-2.5-flash"
+  modelName: string = "gemini-3-flash-preview"
 ) => {
-  if (!apiKey) throw new Error("API Key not found");
-
   const systemInstruction = `
-    You are an expert Data Analyst Agent named "InsightFlow".
+    You are "InsightFlow", an advanced Data Analyst AI.
     
-    Your goal is to help the user understand their data through visualization, cleaning, and analysis.
-    
-    Current Data Context (Summary):
+    Data Context (Current Dataset):
     ${dataContext}
 
-    Guidelines:
-    1. If the user asks for a visualization, ALWAYS use the 'generateVisualization' tool.
-    2. If the user asks to clean data (remove outliers, fill missing), use the 'cleanData' tool.
-    3. If the user likes a chart, suggest adding it to the dashboard using 'addToDashboard'.
-    4. Be concise and professional.
-    5. Chart selection guide:
-       - Univariate (counts): Bar, Pie, Doughnut.
-       - Correlation (2 vars): Scatter, Line.
-       - Correlation (3 vars): Bubble (X, Y, Size).
-       - Distribution: Box Plot (calculates median/quartiles automatically).
-       - Overlap/Sets: Venn Diagram (requires 2 categorical columns).
-       - Density: Heatmap or Contour.
+    Your capabilities:
+    1. VISUALIZATION: Use 'generateVisualization' for any chart request.
+    2. CLEANING: If data appears messy or the user requests it, use 'cleanData'. 
+       - Recommend 'remove_outliers' if user mentions anomalies or extreme values.
+       - Recommend 'impute_mean' for numeric columns with missing values.
+       - Recommend 'drop_missing' if quality is more important than quantity.
+    3. DASHBOARD: Use 'addToDashboard' when a user likes a generated chart.
+
+    Tone: Helpful, data-driven, and proactive. If you see missing values in the context, suggest cleaning them.
   `;
 
   try {
@@ -90,7 +85,7 @@ export const getGeminiResponse = async (
       config: {
         tools: tools,
         systemInstruction: systemInstruction,
-        temperature: 0.4,
+        temperature: 0.2,
       }
     });
     return response;
