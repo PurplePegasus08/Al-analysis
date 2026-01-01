@@ -30,6 +30,18 @@ function App() {
     return saved ? saved === 'dark' : true;
   });
   
+  // Global Event Listener for View actions (like duplication)
+  useEffect(() => {
+    const handleAction = (e: any) => {
+        if (e.type === 'ADD') {
+            setDashboardItems(prev => [...prev, e.item]);
+            setNotification({ message: 'Chart Duplicated', type: 'success' });
+        }
+    };
+    (window as any).dispatchDashboardAction = handleAction;
+    return () => delete (window as any).dispatchDashboardAction;
+  }, []);
+
   // Sync theme with DOM
   useEffect(() => {
     if (isDarkMode) {
@@ -120,7 +132,6 @@ function App() {
     const text = await file.text();
     const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
     if (lines.length > 0) {
-      // Improved parsing to handle quoted commas (common in names in Titanic dataset)
       const headers = parseCSVLine(lines[0]);
       
       const parsedData = lines.slice(1).map(line => {
@@ -133,7 +144,6 @@ function App() {
               return;
             }
             const num = parseFloat(val);
-            // Only convert to number if it's truly a valid number string and not just a prefix (like '3rd')
             row[h] = (isNaN(num) || val.trim() === '' || isNaN(Number(val))) ? val : num;
         });
         return row;
@@ -143,11 +153,6 @@ function App() {
       setData(parsedData);
       setCurrentView(AppView.DATA);
       setNotification({ message: `Successfully loaded ${parsedData.length} records.`, type: 'success' });
-      setChatMessages(prev => [...prev, { 
-          id: Date.now().toString(), 
-          role: 'system', 
-          content: `System: User uploaded ${file.name} with ${parsedData.length} rows.` 
-      }]);
     }
   };
 
@@ -160,7 +165,8 @@ function App() {
             x: 20 + (count % 5) * 40,
             y: 20 + (count % 5) * 40,
             width: 400,
-            height: 300
+            height: 300,
+            zIndex: 10
         };
         return [...prev, newItem];
     });
@@ -189,7 +195,6 @@ function App() {
     });
   }, []);
 
-  // AI Tool Handlers
   const handleAiUpdateViz = useCallback((config: ChartConfig) => {
     setVizConfig({
         ...config,
@@ -211,7 +216,6 @@ function App() {
           const beforeCount = newData.length;
 
           if (operation === 'remove_outliers') {
-              // IQR Method for Outlier removal
               const values = newData.map(r => Number(r[column])).filter(v => !isNaN(v)).sort((a, b) => a - b);
               if (values.length > 4) {
                   const q1 = values[Math.floor(values.length * 0.25)];
@@ -254,7 +258,6 @@ function App() {
       });
   }, []);
 
-  // Root authentication check
   if (!user) {
     return <AuthView onLogin={handleLogin} isDarkMode={isDarkMode} onToggleTheme={() => setIsDarkMode(!isDarkMode)} />;
   }
@@ -274,7 +277,6 @@ function App() {
       />
       
       <main className="flex-1 flex flex-col min-w-0 transition-all relative">
-        {/* Toast Notification */}
         {notification && (
           <div className="absolute top-6 left-1/2 -translate-x-1/2 z-[100] animate-fade-in pointer-events-none">
             <div className={`flex items-center gap-3 px-5 py-3 rounded-2xl shadow-2xl border backdrop-blur-md ${
@@ -292,6 +294,7 @@ function App() {
           <Dashboard 
             data={data} 
             isDarkMode={isDarkMode}
+            headers={headers}
             items={dashboardItems} 
             onUpdateItem={handleUpdateDashboardItem}
             onRemoveItem={handleRemoveFromDashboard}

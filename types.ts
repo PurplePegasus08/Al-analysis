@@ -40,6 +40,14 @@ export interface ChartConfig {
   color?: string;
   theme?: ThemeType;
   tooltip?: TooltipConfig;
+  showBox?: boolean;
+  // Essential Display Options
+  showXAxis?: boolean;
+  showYAxis?: boolean;
+  showGrid?: boolean;
+  showLegend?: boolean;
+  smoothCurve?: boolean;
+  showLabels?: boolean;
 }
 
 export interface DashboardItem extends ChartConfig {
@@ -47,6 +55,8 @@ export interface DashboardItem extends ChartConfig {
   y: number;
   width: number;
   height: number;
+  isLocked?: boolean;
+  zIndex?: number;
 }
 
 export interface ChatMessage {
